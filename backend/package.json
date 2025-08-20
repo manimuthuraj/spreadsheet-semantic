@@ -1,0 +1,48 @@
+{
+  "name": "superbrain",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "test": "ts-node src/search.evals.ts",
+    "dev": "NODE_OPTIONS='--max-old-space-size=1024' ts-node src/index.ts",
+    "worker": "NODE_OPTIONS='--max-old-space-size=1024' ts-node src/worker/worker.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.10",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@bull-board/api": "^6.11.2",
+    "@bull-board/express": "^6.11.2",
+    "@google/genai": "^1.8.0",
+    "@qdrant/js-client-rest": "^1.14.1",
+    "@types/socket.io": "^3.0.1",
+    "autoevals": "^0.0.130",
+    "axios": "^1.10.0",
+    "braintrust": "^0.2.4",
+    "bullmq": "^5.56.1",
+    "client-oauth2": "^4.3.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.1",
+    "dotenv-flow": "^4.1.0",
+    "excel-formula-parser": "^1.1.0",
+    "express": "^5.1.0",
+    "googleapis": "^150.0.1",
+    "hot-formula-parser": "^4.0.0",
+    "install": "^0.13.0",
+    "ioredis": "^5.6.1",
+    "mongoose": "^8.16.3",
+    "npm": "^11.4.2",
+    "openai": "^5.8.2",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.1.0"
+  }
+}

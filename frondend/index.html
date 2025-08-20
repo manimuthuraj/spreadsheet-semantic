@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Superjoin AI</title>
+  <style>
+    /* Explicitly ensure no default margins/padding and full height */
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      /* Include padding and border in the element's total width and height */
+    }
+
+    #root {
+      height: 100%;
+      /* Make sure #root element also takes full height */
+      display: flex;
+      /* Use flexbox for #root to ensure its child (App) expands */
+      flex-direction: column;
+      /* Allow App content to stack vertically */
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>
