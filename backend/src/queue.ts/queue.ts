@@ -30,10 +30,10 @@ export const addSheetParseJob = async (data: any) => {
 // Add repeatable job for syncSheet
 export const repeatableSyncJob = async () => {
   try {
-    const fifteenMins = 15 * 60 * 1000
+    const oneHour = 60 * 60 * 1000
     // Remove any existing repeatable jobs with the same name to avoid duplicates
     await processSheetQueue.removeRepeatable(SYNC_REPEATABLE_SHEET_JOB, {
-      every: fifteenMins
+      every: oneHour
     });
 
     // Add new repeatable job
