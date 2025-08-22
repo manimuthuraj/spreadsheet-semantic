@@ -35,7 +35,7 @@ export const updateSheetJobData = async (jobId: string | undefined, jobData: Par
 }
 
 export const sheetJobs = async () => {
-    return await sheetJobModel.aggregate([
+    return await sheetJobModel.aggregate<SheetJob>([
         {
             $sort: { updatedAt: -1 }
         },

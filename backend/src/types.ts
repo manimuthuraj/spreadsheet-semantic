@@ -56,7 +56,10 @@ export interface Cell {
     value: any;
     formula?: string | null;
     layout?: "horizontal" | "vertical";
-    sheetName: String
+    sheetName: string;
+    pointId: string;
+    para?: string
+    hash?: string
 };
 
 export interface Header extends Cell {
@@ -98,14 +101,17 @@ export interface SheetMetadata {
     tables: Table[];
     formulaGroups: FormulaGroup[];
     headers: Headers[];
+    tableHash?: string;
+    headerHash?: string;
+    payloadHash?: string;
 }
 
 export interface SpreadsheetMetadata {
     spreadsheetId: string;
     spreadsheetName?: string;
     metaData: SheetMetadata[];
-    __v?: number;
-    createdAt?: Date; // because of timestamps: true
+
+    createdAt?: Date;
     updatedAt?: Date;
 }
 
@@ -142,7 +148,7 @@ export interface FormulaGroupData {
     externalSheets: string[];
 }
 
-export interface EmbeedSheetDataPayload {
+export interface EmbeedSheetDataPayload extends SheetsDetails {
     sheetName: string;
     data: {
         parsed2DArray: Cell[][];
@@ -160,6 +166,9 @@ export interface IsHeaderPayload { header: Partial<Headers>; thisSheetTitle: str
 
 export interface SheetsDetails {
     sheetName: string;
+    tableHash?: string;
+    headerHash?: string;
+    payloadHash?: string;
     data: {
         parsed2DArray: Cell[][];
         tables: TableRegion[];
@@ -184,6 +193,17 @@ export interface QueryLog {
     userQuery: string;
     aiResponse: Record<string, any>[];
     qdrandDBData: Record<string, any>[];
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+export interface ICellIndex {
+    spreadsheetId: string;
+    sheetName: string;
+    location: string;
+    pointId: string;
+    hash?: string;
+    lastSyncedAt: Date;
     createdAt: Date;
     updatedAt: Date;
 }

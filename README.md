@@ -10,6 +10,9 @@ Natural Language Queries: Supports conceptual ("show profitability metrics"), fu
 Cross-Sheet Analysis: Tracks related concepts across multiple sheets (e.g., connecting "Budget" and "Actuals").
 Intelligent Result Ranking: Ranks results by semantic relevance, context importance, and formula complexity.
 Structured Output: Returns results in JSON with concept names, locations, formulas, BusinessContext, SemanticFormula and explanations.
+The system now includes incremental synchronization to update spreadsheet data every 15 minutes for realTime update. Update only modified or newly added cells.By using AppScript onEdit change webhook is in improvement.
+
+
 
 Tech Stack
 
@@ -159,9 +162,9 @@ Private Sheets: Currently supports only publicly shared Google Sheets (permissio
 Real-Time Updates: Not fully implemented; relies on manual re-parsing.
 
 Ongoing improvements/Developing:-
-Real-Time Updates: Implement webhook-based triggers for spreadsheet changes.
 Private Sheet Support: Enhance OAuth flow for private sheet access.
-Performance Optimization: Cache frequent queries and pre-compute embeddings for common concepts.
+Performance Optimization: Cache frequent queries.
+Dynamic Sync Intervals: Allow configurable sync intervals based on spreadsheet usage.
 
 Contributing
 

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { SpreadsheetMetadata } from '../types';
+import { SheetMetadata, SpreadsheetMetadata } from '../types';
 
 const Schema = mongoose.Schema;
 
@@ -38,18 +38,20 @@ const FormulaGroupSchema = new Schema({
     },
 });
 
-const SheetMetadataSchema = new Schema({
+const SheetMetadataSchema = new Schema<SheetMetadata>({
     sheetName: { type: String, required: true },
     tables: [TableSchema],
     formulaGroups: [FormulaGroupSchema],
     headers: [HeadersSchema],
+    tableHash: { type: String },
+    headerHash: { type: String },
+    payloadHash: { type: String }
 });
 
 const SpreadsheetMetadataSchema = new Schema<SpreadsheetMetadata>({
     spreadsheetId: { type: String, required: true },
     spreadsheetName: { type: String, },
     metaData: [SheetMetadataSchema],
-    __v: { type: Number, default: 0 },
 }, { timestamps: true });
 
 SpreadsheetMetadataSchema.index({ spreadsheetId: 1 })
@@ -63,7 +65,7 @@ export const createOrUpdateSpreadsheetMetaData = async (spreadsheetId: string, m
 }
 
 export const getSpreadsheetMetaData = async (spreadsheetId: string) => {
-    const metaData = await SpreadsheetModel.find({ spreadsheetId }).lean<SpreadsheetMetadata>({ defaults: true });
+    const metaData = await SpreadsheetModel.findOne({ spreadsheetId }).lean<SpreadsheetMetadata>({ defaults: true });
     return metaData
 }
 

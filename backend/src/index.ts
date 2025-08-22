@@ -2,7 +2,7 @@ import express, { Request, Response } from "express"
 import "./dot-env.config"
 import cors from 'cors';
 
-import { serverAdapter } from "./queue.ts/queue";
+import { repeatableSyncJob, serverAdapter } from "./queue.ts/queue";
 import { createServer } from "http";
 import { initSocket, socketIO } from "./socket";
 import emitter, { CHANNEL } from "./emitter";
@@ -34,7 +34,7 @@ app.get('/', async (req: Request, res: Response) => {
 
 const PORT = process.env.PORT || 3001;
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   initSocket(server)
 
@@ -42,5 +42,6 @@ server.listen(PORT, () => {
     socketIO().emit("sheetStatusUpdate", data);
   });
 
+  await repeatableSyncJob();
 });
 

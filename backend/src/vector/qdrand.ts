@@ -7,28 +7,27 @@ export const qdrant = new QdrantClient({
 
 const collectionName = "superbrain";
 // export async function createCollection() {
-
-
 //     const response = await qdrant.createCollection(collectionName, {
 //       vectors: {
 //         size: 3072, // dimension of your embeddings
 //         distance: "Cosine", // or "Dot", "Euclid"
 //       },
 //     });
-
 //     console.log(response);
 //   }
-
 //   createCollection();
 
 
 export async function insertPoints(points: any) {
-
-  const response = await qdrant.upsert(collectionName, {
+  await qdrant.upsert(collectionName, {
     points,
   });
+}
 
-  console.log(response);
+export async function removePoints(ids: string[]) {
+  await qdrant.delete(collectionName, {
+    points: ids
+  })
 }
 
 

@@ -1,21 +1,29 @@
-import { v4 as uuidv4 } from 'uuid';
+import { v5 as uuidv5 } from 'uuid';
 import axios from 'axios';
 import { formulaBussinessMapping, headerBussinessMapping, isHeader } from '../AI/gemini';
 import { createEmbedding } from "../AI/openai"
 import { refreshToken } from '../credentials/credential';
-import { insertPoints } from '../vector/qdrand';
+import { insertPoints, removePoints } from '../vector/qdrand';
 import { embeedSheet } from '../queue.ts/queue';
-import { createMetaData, createOrUpdateSpreadsheetMetaData } from '../model/storeMetaData';
+import { createMetaData, createOrUpdateSpreadsheetMetaData, getSpreadsheetMetaData } from '../model/storeMetaData';
 import { sheetJobModel, updateSheetJobData } from '../model/sheetsJob';
 import { Job } from 'bullmq';
 import emitter, { CHANNEL } from '../emitter';
-import { Cell, RequestConfig, TableBlock, TableRegion, Headers, Spreadsheet, SheetTitle, GetSheetDataPayload, EmbeedSheetDataPayload, SheetsDetails } from '../types';
+import { Cell, RequestConfig, TableBlock, TableRegion, Headers, Spreadsheet, SheetTitle, GetSheetDataPayload, EmbeedSheetDataPayload, SheetsDetails, SpreadsheetMetadata } from '../types';
+import crypto from "crypto";
+import { CellIndexModel } from '../model/cellIndex';
 
 
-function sleep(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+const createHash = async (data: any) => {
+    const serialized = typeof data === 'string' ? data : JSON.stringify(data);
+    return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
+const NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"; // constant namespace
+
+export function makePointId(spreadsheetId: string, sheetName: string, location: string): string {
+    return uuidv5(`${spreadsheetId}:${sheetName}:${location}`, NAMESPACE);
+}
 
 const getCellAddress = (row: number, col: number): string => {
     let letters = '';
@@ -57,6 +65,7 @@ const fetchSheetAs2DObjects = async (spreadsheetId: string, requestHeaders: Requ
                 value,
                 formula: (typeof formula === 'string' && formula.startsWith('=')) ? formula : null,
                 sheetName,
+                pointId: await makePointId(spreadsheetId, sheetName, location)
             });
         }
         result.push(row);
@@ -344,16 +353,16 @@ const flattenSemanticData = (cell: any) => {
     return `${semanticText}, ${paragraph}`;
 }
 
-export const embedCell = async (cells: Cell[][], sheetId: string, spreadSheetName: string, isLastRow: boolean, jobId: string) => {
+export const embedCell = async (cells: Cell[], sheetId: string, spreadSheetName: string, isLastRow: boolean, jobId: string) => {
 
-    const payload = await Promise.all(cells.map(async (c: any) => {
+    const payload = await Promise.all(cells.map(async (c) => {
         const vector = await createEmbedding(c.para)
-        return { id: uuidv4(), payload: { ...c, sheetId, spreadSheetName }, vector }
+        return { id: c.pointId, payload: { ...c, sheetId, spreadSheetName }, vector }
     }))
 
     await insertPoints(payload)
     if (isLastRow && jobId) {
-        const jobData = await sheetJobModel.findByIdAndUpdate({ _id: jobId }, { status: 'success', completedAt: new Date() })
+        const jobData = await updateSheetJobData(jobId, { status: 'success', completedAt: new Date() })
         emitter.emit(CHANNEL, jobData)
     }
 
@@ -376,159 +385,265 @@ const unflattenHeaders = (flatHeaders: Cell[]) => {
 }
 
 const fetchSpreadsheetMetadata = async (spreadsheetId: string, headers: RequestConfig['headers']): Promise<Spreadsheet> => {
-    const { access_token } = await refreshToken();
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`;
     const { data } = await axios.get<Spreadsheet>(url, { headers, }) ?? {};
     return data;
 }
 
-const getSheetsData = async (payload: GetSheetDataPayload) => {
-    const { spreadsheetId, requestHeaders, spreadsheet, sheetTitle, sheetsTitle, job } = payload
-    const parsed2DArray = await fetchSheetAs2DObjects(spreadsheetId, requestHeaders, sheetTitle.title!);
-    if (!parsed2DArray?.length) return
 
-    const tables = detectTablesWithHeaders(parsed2DArray);
-    let headers = tables.map((table) => extractHeaders(parsed2DArray, table))
+const reconcileDeletions = async (spreadsheetId: string, allPointIds: string[], job: Job): Promise<void> => {
+    const notExisting = await CellIndexModel.find({ spreadsheetId, pointId: { $nin: allPointIds } })
+        .lean()
+        .select({ pointId: 1, location: 1 });
+    console.log('notExisting', notExisting.map((n) => n.location));
 
-    await job.updateProgress({ step: 2, message: "got sheet data and headers" })
-
-    const isVerticalHeader = headers.some((h) => h.vertical.length > 0)
-    if (isVerticalHeader) {
-        headers = await Promise.all(headers.map(async (header) => {
-            if (!header?.vertical?.length) return header
-            const isHead = await isHeader({ header, thisSheetTitle: sheetTitle.title, sheetsTitles: JSON.stringify(sheetTitle), title: spreadsheet?.properties?.title! })
-            if (isHead.isVerticalHeader) return header
-            console.log(isHead.isVerticalHeader)
-            return { horizontal: header.horizontal, vertical: [] }
-        }))
+    if (notExisting.length > 0) {
+        const notExistingIds = notExisting.map((n) => n.pointId);
+        await removePoints(notExistingIds).catch((err) => console.error('Error removing points from Qdrant:', err));
+        await CellIndexModel.deleteMany({ pointId: { $in: notExistingIds } }).catch((err) => console.error('Error deleting from CellIndexModel:', err));
+        console.log(`Deleted ${notExisting.length} obsolete cells from Qdrant and MongoDB`);
     }
+};
 
-    await job.updateProgress({ step: 3, message: "checked vertical header" })
+const updateSheetMetadata = async (finalData: SheetsDetails[], spreadsheetId: string, spreadsheetName: string | undefined, job: Job): Promise<void> => {
+    const metaData = finalData.map((sheetsDetail) => ({
+        sheetName: sheetsDetail.sheetName,
+        tables: sheetsDetail.data.tables,
+        //@ts-expect-error
+        formulaGroups: sheetsDetail.data.formulaGroups || [],
+        headers: sheetsDetail.data.headers,
+        tableHash: sheetsDetail.tableHash,
+        headerHash: sheetsDetail.headerHash,
+    }));
 
-    const formulaGroups = await groupFormulasByStructure(parsed2DArray);
+    await job.updateProgress({ step: 5, message: 'updating metadata' });
+    await createMetaData({ finalData, spreadsheetId });
+    await createOrUpdateSpreadsheetMetaData(spreadsheetId, { metaData, spreadsheetId, spreadsheetName });
+};
 
-    const flattenHeaders = flattHeaders(headers)
-    const bussinessConceptMappedHeaders = await headerBussinessMapping(flattenHeaders, spreadsheet?.properties?.title, sheetsTitle)
-    headers = unflattenHeaders(bussinessConceptMappedHeaders?.headers)
-    // await sleep(10000)
-    await job.updateProgress({ step: 3, message: "mapped headers with bussiness concept" })
+const mapFormulas = async (sheetsDetail: SheetsDetails, sheetsDetails: SheetsDetails[], cachedFormula: any, sheetsTitle: SheetTitle[], job: Job) => {
+    const formulaMapping: any[] = [];
+    console.log(sheetsDetail.data.formulaGroupsData.formulaGroups)
+    if (sheetsDetail.data.formulaGroupsData.formulaGroups) {
+        for (const f of sheetsDetail.data.formulaGroupsData.formulaGroups) {
+            const existingFormula = cachedFormula.find((cf: any) => cf.formula === f.formula);
+            const validCells = f.cells.filter((loc: string) => {
+                const cell = sheetsDetail.data.parsed2DArray.flat().find((c) => c.location === loc);
+                return cell && normalizeFormula(cell.formula ?? "") === f.formula;
+            });
 
-    return ({ sheetName: sheetTitle.title, data: { parsed2DArray, tables, headers: headers, formulaGroupsData: formulaGroups } });
+            if (validCells.length === 0) continue;
+            if (existingFormula) {
+                formulaMapping.push({ ...f, cells: validCells, formulaMapped: existingFormula.formulaMapped });
+            } else {
+                const allHeader = sheetsDetail.data.formulaGroupsData.externalSheets
+                    ?.map((ex) => sheetsDetails.find((sh) => sh.sheetName === ex)?.data?.headers || [])
+                    .flat();
+                const formulaMapped = await formulaBussinessMapping(f, [...sheetsDetail.data.headers, ...allHeader], sheetsDetail.sheetName, sheetsTitle).catch(
+                    (err) => {
+                        console.error(`Error mapping formula for ${sheetsDetail.sheetName}:`, err);
+                        return null;
+                    }
+                );
+                if (formulaMapped) {
+                    formulaMapping.push({ ...f, cells: validCells, formulaMapped });
+                }
+            }
+        }
+        await job.updateProgress({ step: 3, message: `mapped formulas for ${sheetsDetail.sheetName}` });
+    }
+    return formulaMapping
 }
 
-const processEmbedData = async (sheetsDetail: EmbeedSheetDataPayload, sheetsDetails: EmbeedSheetDataPayload[], spreadsheetId: string, jobId: string, job: Job, sheetsTitle: SheetTitle[], isLastSheet: boolean, spreadsheetName?: string) => {
-    const formulaMapping = [];
-    for (const f of sheetsDetail?.data?.formulaGroupsData?.formulaGroups || []) {
-        const allHeader = sheetsDetail?.data?.formulaGroupsData?.externalSheets?.map((ex) => {
-            return sheetsDetails?.find((sh) => sh.sheetName === ex)?.data?.headers
-        })
-        const formulaMapped = await formulaBussinessMapping(f, [...sheetsDetail.data.headers, ...allHeader], sheetsDetail?.sheetName, sheetsTitle).catch();
-        formulaMapping.push({ ...f, formulaMapped });
-        await job.updateProgress({ step: 4, message: "formula bussiness mapping" })
+const processSheetData = async (spreadsheetId: string, spreadsheet: Spreadsheet, sheetTitle: SheetTitle, sheetsTitle: SheetTitle[], requestHeaders: RequestConfig['headers'], sheetMeta: SpreadsheetMetadata | null, job: Job) => {
+    const cachedMetaData = sheetMeta?.metaData.find((m) => m.sheetName === sheetTitle.title);
+    const parsed2DArray = await fetchSheetAs2DObjects(spreadsheetId, requestHeaders, sheetTitle.title);
+    if (!parsed2DArray?.length) return null;
 
+    let tables = detectTablesWithHeaders(parsed2DArray);
+    tables.sort((a, b) => a.startRow - b.startRow || a.startCol - b.startCol);
+
+    let headers = tables.map((table) => extractHeaders(parsed2DArray, table));
+    headers.forEach((h) => {
+        h.horizontal.sort((a, b) => a.location.localeCompare(b.location));
+        h.vertical.sort((a, b) => a.location.localeCompare(b.location));
+    });
+
+    const tableHash = await createHash(tables);
+    const headerHash = await createHash(headers);
+    const formulaGroupsData = await groupFormulasByStructure(parsed2DArray);
+
+    console.log('Hashes:', { sheet: sheetTitle.title, tableHash, cachedTableHash: cachedMetaData?.tableHash, headerHash, cachedHeaderHash: cachedMetaData?.headerHash });
+
+    if (tableHash === cachedMetaData?.tableHash && headerHash === cachedMetaData?.headerHash && cachedMetaData.headers) {
+        headers = cachedMetaData.headers;
+        await job.updateProgress({ step: 2, message: `reused cached headers and tables for ${sheetTitle.title}` });
+    } else {
+        const isVerticalHeader = headers.some((h) => h.vertical.length > 0);
+        if (isVerticalHeader) {
+            headers = await Promise.all(
+                headers.map(async (header) => {
+                    if (!header?.vertical?.length) return header;
+                    const isHead = await isHeader({
+                        header,
+                        thisSheetTitle: sheetTitle.title,
+                        sheetsTitles: JSON.stringify(sheetsTitle),
+                        title: spreadsheet?.properties?.title!,
+                    });
+                    return isHead.isVerticalHeader ? header : { horizontal: header.horizontal, vertical: [] };
+                })
+            );
+        }
+        const flattenHeaders = flattHeaders(headers);
+        const bussinessConceptMappedHeaders = await headerBussinessMapping(flattenHeaders, spreadsheet?.properties?.title, sheetsTitle);
+        headers = unflattenHeaders(bussinessConceptMappedHeaders?.headers || []);
+        await job.updateProgress({ step: 2, message: `mapped headers with business concept for ${sheetTitle.title}` });
     }
+
+    return { tableHash, headerHash, sheetName: sheetTitle.title, data: { parsed2DArray, tables, headers, formulaGroupsData } };
+}
+
+const bulkUpsertCellIndex = async (toEmbed: Cell[], spreadsheetId: string, sheetName: string, isLastSheet: boolean, jobId: string, job: Job) => {
+    // Embed only new or updated cells
+    if (toEmbed.length > 0) {
+        // Batch embedding to avoid overload
+        for (let k = 0; k < toEmbed.length; k += 100) {
+            const batch = toEmbed.slice(k, k + 100);
+            await embedCell(batch, spreadsheetId, sheetName, isLastSheet && k + 100 >= toEmbed.length, jobId);
+            await job.updateProgress({ step: 4, message: `embedded ${batch.length} cells for ${sheetName}` });
+            console.log(`Embedded cells: ${batch.map((b) => b.location).join(', ')}`);
+        }
+    }
+
+    const lastSyncedAt = new Date()
+    const bulkUpdateCellIndex = toEmbed.map((row) => ({
+        updateOne: {
+            filter: { pointId: row.pointId },
+            update: { $set: { pointId: row.pointId, spreadsheetId, sheetName, location: row.location, hash: row.hash, lastSyncedAt } },
+            upsert: true,
+        },
+    }));
+
+    if (bulkUpdateCellIndex.length > 0) {
+        await CellIndexModel.bulkWrite(bulkUpdateCellIndex).catch((err) => console.error(`Error updating CellIndexModel for ${sheetName}:`, err));
+        console.log(`Updated CellIndexModel for ${sheetName}: ${toEmbed.length} cells`);
+    }
+}
+
+const processCell = async (p: Cell, sheetsDetail: SheetsDetails, spreadsheetId: string) => {
+    if (p.value == null && p.formula == null) return null;
+    const headerCell = getCellHeaders(p.location, sheetsDetail.data.headers[0]);
+    let formulaDescription: string | undefined;
+    let semanticFormula: string | undefined;
 
     //@ts-expect-error
-    sheetsDetail.data.formulaGroups = formulaMapping
-
-    const parsed2DArray = await Promise.all(sheetsDetail.data.parsed2DArray.map(async (parsedData, i: number, arr) => {
-        const isLastRow = i === arr.length - 1;
-        const row = parsedData.map((p, i: number) => {
-            const headerCell = getCellHeaders(p.location, sheetsDetail.data.headers[0])
-            let formulaDescription; let semanticFormula
-
-            //@ts-expect-error
-            if (sheetsDetail?.data?.formulaGroups?.length) {
-                //@ts-expect-error
-                sheetsDetail.data.formulaGroups.forEach((e) => {
-                    if (e?.cells?.includes(p.location)) {
-                        formulaDescription = e?.formulaMapped?.description;
-                        semanticFormula = e?.formulaMapped?.semanticFormula;
-                    }
-                });
-            }
-            const cellWithHeader = { ...p, headerCell, formulaDescription, semanticFormula }
-            const para = flattenSemanticData(cellWithHeader)
-            return { ...cellWithHeader, para }
-        })
-
-        await embeedSheet({ row, spreadsheetId, spreadsheetName, isLastRow: isLastSheet && isLastRow, jobId })
-        await job.updateProgress({ step: 5, message: "embedding" })
-
-        return row
-    }))
-    return {
-        sheetName: sheetsDetail.sheetName,
-        data: { ...sheetsDetail.data, parsed2DArray }
+    for (const e of sheetsDetail.data.formulaGroups || []) {
+        if (e.cells.includes(p.location)) {
+            formulaDescription = e.formulaMapped?.description;
+            semanticFormula = e.formulaMapped?.semanticFormula;
+            break;
+        }
     }
+
+    const cellWithHeader = { ...p, headerCell, formulaDescription, semanticFormula };
+    const para = flattenSemanticData(cellWithHeader);
+    const pointId = makePointId(spreadsheetId, sheetsDetail.sheetName, p.location);
+    const hash = await createHash(para || '');
+    return { ...cellWithHeader, para, pointId, hash };
+
 }
 
 
-export async function processSheetAndStore(spreadsheetId: string, jobId: string, job: Job) {
-    let jobData = await updateSheetJobData(jobId, { status: 'processing', startedAt: new Date() })
-    emitter.emit(CHANNEL, jobData)
+export const syncSheet = async (spreadsheetId: string, jobId: string, job: Job) => {
+    let jobData = await updateSheetJobData(jobId, { status: 'processing', startedAt: new Date() });
+    emitter.emit(CHANNEL, jobData);
+    const allPointIds: string[] = [];
+
     try {
+        const sheetMeta = await getSpreadsheetMetaData(spreadsheetId);
+        if (!sheetMeta) throw new Error('Spreadsheet metadata not found');
+        console.log('sheetMeta:', sheetMeta);
+
         const { access_token } = await refreshToken();
-        const requestHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${access_token}`, }
+        const requestHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` };
 
-        const spreadsheet = await fetchSpreadsheetMetadata(spreadsheetId, requestHeaders)
+        const spreadsheet = await fetchSpreadsheetMetadata(spreadsheetId, requestHeaders);
+        await job.updateProgress({ step: 1, message: 'got spreadsheet' });
+        jobData = await updateSheetJobData(jobId, { spreadSheetName: spreadsheet?.properties?.title });
+        emitter.emit(CHANNEL, jobData);
 
-        await job.updateProgress({ step: 1, message: "got spreadsheet" })
-        jobData = await updateSheetJobData(jobId, { spreadSheetName: spreadsheet?.properties?.title })
-        emitter.emit(CHANNEL, jobData)
+        if (!spreadsheet?.sheets) throw new Error('No sheets found in spreadsheet');
 
-        if (!spreadsheet?.sheets) throw new Error('sheets not found')
-
-        const sheetsTitle = spreadsheet?.sheets?.map((s) => {
-            return { sheetId: s?.properties?.sheetId!, title: s?.properties?.title! }
-        })
+        const sheetsTitle = spreadsheet.sheets.map((s) => ({ sheetId: s?.properties?.sheetId!, title: s?.properties?.title! }));
 
         const sheetsDetails = (await Promise.all(sheetsTitle.map(async (sheetTitle) => {
-            return await getSheetsData({ job, requestHeaders, sheetsTitle, sheetTitle, spreadsheet, spreadsheetId })
-        }))).filter(Boolean) as SheetsDetails[]
-
-        if (!sheetsDetails?.length) {
-            let jobData = await updateSheetJobData(jobId, { status: 'success', completedAt: new Date() })
-            emitter.emit(CHANNEL, jobData)
-            return
-        }
-
-
-
-        const embedData = async () => {
-            return Promise.all(sheetsDetails.map(async (sheetsDetail, i, arr) => {
-                const isLastSheet = i === arr.length - 1;
-                return await processEmbedData(sheetsDetail, sheetsDetails, spreadsheetId, jobId, job, sheetsTitle, isLastSheet, spreadsheet?.properties?.title)
-            }))
-        }
-
-        const finalData = await embedData()
-        const metaData = finalData.map((sheetsDetail) => {
-            //@ts-expect-error
-            return { sheetName: sheetsDetail.sheetName, tables: sheetsDetail?.data?.tables, formulaGroups: sheetsDetail?.data?.formulaGroups, headers: sheetsDetail?.data?.headers }
+            return await processSheetData(spreadsheetId, spreadsheet, sheetTitle, sheetsTitle, requestHeaders, sheetMeta, job);
         })
+        )).filter(Boolean) as SheetsDetails[];
 
-        await job.updateProgress({ step: 3, message: "add meta data" })
-
-        await createMetaData({ finalData, spreadsheetId })
-        await createOrUpdateSpreadsheetMetaData(spreadsheetId, { metaData, spreadsheetId, spreadsheetName: spreadsheet?.properties?.title })
-        console.log(metaData)
-
-        return { spreadsheetName: spreadsheet?.properties?.title, data: finalData }
-    } catch (error) {
-        console.log(error, "error makig ")
-        let errorMsg = (error as Error)?.message
-
-        //@ts-expect-error
-        if (error.status == 403 || error.status == 404) {
-            errorMsg = `At the moment, this app only works with Google Sheets that are shared publicly (accessible to anyone with the link), Implementing for all. ${(error as Error)?.message}`
+        if (!sheetsDetails.length) {
+            jobData = await updateSheetJobData(jobId, { status: 'success', completedAt: new Date() });
+            emitter.emit(CHANNEL, jobData);
+            return { spreadsheetName: spreadsheet?.properties?.title, data: [] };
         }
 
-        const jobData = await sheetJobModel.findOneAndUpdate({ _id: jobId }, { status: 'failed', error: errorMsg }, { new: true })
-        emitter.emit(CHANNEL, jobData)
+        const finalData = await Promise.all(
+            sheetsDetails.map(async (sheetsDetail, i, arr) => {
+                const isLastSheet = i === arr.length - 1;
+                const cachedMetaData = sheetMeta.metaData.find((m) => m.sheetName === sheetsDetail.sheetName) || {};
+                //@ts-expect-error
+                const cachedFormula = cachedMetaData.formulaGroups || [];
+
+                //@ts-expect-error
+                sheetsDetail.data.formulaGroups = await mapFormulas(sheetsDetail, sheetsDetails, cachedFormula, sheetsTitle, job);
+
+                const parsed2DArray = await Promise.all(
+                    sheetsDetail.data.parsed2DArray.map(async (parsedData, j, arr) => {
+                        const row = await Promise.all(parsedData.map(async (p) => {
+                            return await processCell(p, sheetsDetail, spreadsheetId)
+                        }));
+                        const filteredRow = row.filter(Boolean) as Cell[];
+                        if (filteredRow.length === 0) return [];
+
+                        allPointIds.push(...filteredRow.map((cell) => cell.pointId));
+                        return filteredRow;
+                    })
+                );
+
+                const sheetPointIds = parsed2DArray.flat().map((x) => x.pointId);
+                const existing = await CellIndexModel.find({ pointId: { $in: sheetPointIds } }).lean().select({ pointId: 1, hash: 1 });
+                const existingMap = new Map(existing.map((e) => [e.pointId, e.hash]));
+
+                const toEmbed = parsed2DArray
+                    .flat()
+                    .filter((x) => !existingMap.has(x.pointId) || existingMap.get(x.pointId) !== x.hash);
+                console.log('toEmbed', toEmbed.map((u) => u.location));
+
+                await bulkUpsertCellIndex(toEmbed, spreadsheetId, sheetsDetail.sheetName, isLastSheet, jobId, job)
+
+                return { ...sheetsDetail, data: { ...sheetsDetail.data, parsed2DArray } };
+            })
+        );
+
+        await reconcileDeletions(spreadsheetId, allPointIds, job)
+
+        await updateSheetMetadata(finalData, spreadsheetId, spreadsheet?.properties?.title, job)
+
+        jobData = await updateSheetJobData(jobId, { status: 'success', completedAt: new Date() });
+        emitter.emit(CHANNEL, jobData);
+
+        return { spreadsheetName: spreadsheet?.properties?.title, data: finalData };
+    } catch (error) {
+        console.error('Error in syncSheet:', error);
+        let errorMsg = (error as Error).message;
+        if ((error as any).status === 403 || (error as any).status === 404) {
+            errorMsg = `At the moment, this app only works with Google Sheets that are shared publicly (accessible to anyone with the link). ${errorMsg}`;
+        }
+        jobData = await updateSheetJobData(jobId, { status: 'failed', error: errorMsg });
+        emitter.emit(CHANNEL, jobData);
+        throw error;
     }
 }
-
 
 
 
