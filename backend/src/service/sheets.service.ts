@@ -69,7 +69,7 @@ export const syncAllSheets = async () => {
     const FIFTEEN_MINUTES = 15 * 60 * 1000;
     const now = Date.now();
 
-    existingSheets.map(async (e) => {
+    existingSheets.map(async (e, i) => {
 
         for (const sheet of existingSheets) {
             const lastUpdated = new Date(sheet.updatedAt).getTime();
@@ -77,7 +77,7 @@ export const syncAllSheets = async () => {
             if (now - lastUpdated >= FIFTEEN_MINUTES) {
                 // ✅ More than 15 mins old → enqueue sync
                 const jobId = e._id
-                await addSheetParseJob({ jobId, spreadsheetId: e.spreadsheetId });
+                await addSheetParseJob({ jobId, spreadsheetId: e.spreadsheetId }, 30 * 60 * 1000);
                 console.log(`Queued sync for ${sheet.spreadsheetId}`);
             } else {
                 console.log(

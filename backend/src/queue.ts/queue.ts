@@ -21,8 +21,8 @@ export const embeedSheet = async (data: any, delay?: number) => {
   await myQueue.add(EMBEED_SHEET_JOB, data, { delay, removeOnComplete: true });
 }
 
-export const addSheetParseJob = async (data: any) => {
-  await processSheetQueue.add(PARSE_SHEET_JOB, data, { removeOnComplete: true })
+export const addSheetParseJob = async (data: any, delay?: number) => {
+  await processSheetQueue.add(PARSE_SHEET_JOB, data, { removeOnComplete: true, delay })
 }
 
 
@@ -30,16 +30,16 @@ export const addSheetParseJob = async (data: any) => {
 // Add repeatable job for syncSheet
 export const repeatableSyncJob = async () => {
   try {
-    const oneHour = 60 * 60 * 1000
+    const halfAnHour = 30 * 60 * 1000
     // Remove any existing repeatable jobs with the same name to avoid duplicates
     await processSheetQueue.removeRepeatable(SYNC_REPEATABLE_SHEET_JOB, {
-      every: oneHour
+      every: halfAnHour
     });
 
     // Add new repeatable job
     await processSheetQueue.add(SYNC_REPEATABLE_SHEET_JOB, { jobId: `sync-sheet-${Date.now()}` },
       {
-        repeat: { every: 15 * 60 * 1000 },
+        repeat: { every: halfAnHour },
         jobId: 'syncSheetRepeatableJob',
         removeOnComplete: true,
         removeOnFail: false

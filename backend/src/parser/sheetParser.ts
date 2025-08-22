@@ -561,9 +561,6 @@ export const syncSheet = async (spreadsheetId: string, jobId: string, job: Job) 
 
     try {
         const sheetMeta = await getSpreadsheetMetaData(spreadsheetId);
-        if (!sheetMeta) throw new Error('Spreadsheet metadata not found');
-        console.log('sheetMeta:', sheetMeta);
-
         const { access_token } = await refreshToken();
         const requestHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` };
 
@@ -590,7 +587,7 @@ export const syncSheet = async (spreadsheetId: string, jobId: string, job: Job) 
         const finalData = await Promise.all(
             sheetsDetails.map(async (sheetsDetail, i, arr) => {
                 const isLastSheet = i === arr.length - 1;
-                const cachedMetaData = sheetMeta.metaData.find((m) => m.sheetName === sheetsDetail.sheetName) || {};
+                const cachedMetaData = sheetMeta?.metaData.find((m) => m.sheetName === sheetsDetail.sheetName) || {};
                 //@ts-expect-error
                 const cachedFormula = cachedMetaData.formulaGroups || [];
 
