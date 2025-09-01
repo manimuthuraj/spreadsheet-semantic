@@ -36,15 +36,34 @@ export const repeatableSyncJob = async () => {
       every: halfAnHour
     });
 
+
+
+
+    (async () => {
+      await connection.flushall(); // 🚨 Deletes ALL keys in this Redis instance
+      console.log("Redis flushed");
+      // redis.disconnect();
+    })();
+
+    const repeatableJobs = await processSheetQueue.getRepeatableJobs();
+    console.log(repeatableJobs, "repeatableJobs")
+
+    // for (const job of repeatableJobs) {
+    //   console.log(job.key); // debug
+    await (await processSheetQueue.jobScheduler).removeJobScheduler('repeat:2c3632fed3a7ca0eba63b6d64567bad7:1755933300000').then((c) => {
+      console.log(c)
+    })
+    // }
+
     // Add new repeatable job
-    await processSheetQueue.add(SYNC_REPEATABLE_SHEET_JOB, { jobId: `sync-sheet-${Date.now()}` },
-      {
-        repeat: { every: halfAnHour },
-        jobId: 'syncSheetRepeatableJob',
-        removeOnComplete: true,
-        removeOnFail: false
-      });
-    console.log('Repeatable syncSheet job scheduled successfully');
+    // await processSheetQueue.add(SYNC_REPEATABLE_SHEET_JOB, { jobId: `sync-sheet-${Date.now()}` },
+    //   {
+    //     repeat: { every: halfAnHour },
+    //     jobId: 'syncSheetRepeatableJob',
+    //     removeOnComplete: true,
+    //     removeOnFail: false
+    //   });
+    // console.log('Repeatable syncSheet job scheduled successfully');
   } catch (error) {
     console.error('Error setting up repeatable syncSheet job:', error);
   }
