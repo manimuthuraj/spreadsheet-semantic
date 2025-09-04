@@ -17,7 +17,7 @@ export function Header({ onBack, showBackButton }: HeaderProps) {
             justifyContent="space-between"
             boxShadow="md"
         >
-            {/* Left side: Superjoin AI branding */}
+            {/* Left side: Semantic Search branding */}
             <HStack spacing={2} ml={2}> {/* Added HStack and adjusted margin-left for spacing */}
                 <Text fontSize="xl" fontWeight="bold" fontFamily="sans-serif">
                     Superjoin
